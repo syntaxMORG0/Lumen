@@ -14,8 +14,8 @@ let KernelData = {
   logedIn: false,
   username: "", //leave blank
   author: {
-    username: "syntaxMORG0",
-    Repo: "Lumen"
+    username: "Samuraien2",
+    Repo: "Lumen-better"
   }
 };
 
