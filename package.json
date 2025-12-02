@@ -1,0 +1,22 @@
+{
+  "name": "kernel",
+  "version": "1.0.0",
+  "description": "A os kernel in typescript",
+  "keywords": [
+    "os"
+  ],
+  "license": "MIT",
+  "author": "syntaxMORG0",
+  "type": "module",
+  "main": "Image.ts",
+  "scripts": {
+    "start": "node Image.ts",
+    "test": "node -v"
+  },
+  "dependencies": {
+    "readline-sync": "^1.4.10"
+  },
+  "devDependencies": {
+    "@types/readline-sync": "^1.4.8"
+  }
+}
