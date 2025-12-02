@@ -1,11 +1,15 @@
-import { clear, log } from "node:console";
-import { get } from "node:http";
 import { styleText } from "node:util";
-import { startupSnapshot } from "node:v8";
 import * as readlineSync from "readline-sync";
 import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import crypto from "crypto";
+import http from "http";
+import open from "open";
+import { config } from "node:process";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execPromise = promisify(exec);
 
 //high-level kernel data
 //Userdata wil later be stored in a JSON file
@@ -21,6 +25,15 @@ let KernelData = {
   },
   temp: {
     autoE2E_API: "" //leave empty the key is automatically generated
+  },
+  config: {
+    network: {
+      type: "DHCP", //default
+      ip: "",
+      gateway: "",
+      dns: "",
+      subnetmask: "",
+    }
   }
 };
 
@@ -198,8 +211,49 @@ function ReadLn(adress?: string, prefix?: string | undefined) {
   }
 }
 
-function LumenEditor() {
-  //comming soon
+async function LumenEditor() {
+  const src = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Lumen Editor</title>
+        <style>
+          body { margin: 0; padding: 20px; font-family: monospace; }
+          #editor { 
+            width: 100%; 
+            height: 90vh; 
+            border: 1px solid #ccc; 
+            padding: 10px;
+            outline: none;
+          }
+        </style>
+      </head>
+      <body>
+        <h2>Lumen Editor</h2>
+        <div id="editor" contenteditable="true">Start typing here...</div>
+      </body>
+    </html>
+  `;
+  
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(src);
+  });
+  
+  server.listen(3000, async () => {
+    display("0x00000", "Server running at http://localhost:3000", "0x0F000", "0x0F400");
+    display("0x00000", "Opening browser... Press Ctrl+C to stop server", "0x0F000", "0x0F900");
+    try {
+      await open('http://localhost:3000');
+    } catch (err) {
+      const error = err as Error;
+      display("0x00000", "Could not open browser automatically. Please visit http://localhost:3000", "0x0F000", "0x0F300");
+    }
+  });
+  
+  server.on('error', (err) => {
+    display("0x00000", `Server error: ${err.message}`, "0x0F000", "0x0F200");
+  });
 }
 
 async function CommandEngine(command: string) {
@@ -235,7 +289,6 @@ async function CommandEngine(command: string) {
             const user = KernelData.author.username;
             const repo = KernelData.author.Repo;
             const url = `https://api.github.com/repos/${user}/${repo}/releases/latest`;
-          
             try {
               const response = await fetch(url);
               if (!response.ok) {
@@ -263,12 +316,10 @@ async function CommandEngine(command: string) {
           const token = readlineSync.question("Enter GitHub Personal Access Token: ", {
             hideEchoBack: true
           });
-          
           if (!token) {
             display("0x00000", "No token provided!", "0x0F000", "0x0F200");
             break;
           }
-
           try {
             const response = await fetch('https://api.github.com/user', {
               headers: {
@@ -276,15 +327,13 @@ async function CommandEngine(command: string) {
                 'User-Agent': 'Lumen-CLI'
               }
             });
-
             if (!response.ok) {
               display("0x00000", "Failed to authenticate. Check your token.", "0x0F000", "0x0F200");
               break;
             }
-
             const userData = await response.json();
             const username = userData.login;
-
+            
             // Save both username and token to data.json
             await writeFile('data.json', JSON.stringify({ username, token }, null, 2));
             
@@ -316,6 +365,231 @@ async function CommandEngine(command: string) {
         }
         else {
           display("0x00000", "missing arguments!", "0x0F000", "0x0F200");
+        }
+        break;
+      case memory["0xFF000"]["0xFF007"]:
+        await LumenEditor();
+        break;
+      case command.startsWith(memory["0xFF000"]["0xFF008"]) && command:
+        const res = command.substring(memory["0xFF000"]["0xFF008"].length).trim();
+        if (res === "a") {
+          //ip a - display network configuration
+          display("0x00000", "\nNetwork Configuration:", "0x1F000", "0x0F700");
+          display("0x00000", `Type: ${KernelData.config.network.type}`, "0x0F000", "0x0F100");
+          if (KernelData.config.network.type === "MANUAL") {
+            display("0x00000", `IP Address: ${KernelData.config.network.ip || "Not set"}`, "0x0F000", "0x0F100");
+            display("0x00000", `Gateway: ${KernelData.config.network.gateway || "Not set"}`, "0x0F000", "0x0F100");
+            display("0x00000", `DNS: ${KernelData.config.network.dns || "Not set"}`, "0x0F000", "0x0F100");
+            display("0x00000", `Subnet Mask: ${KernelData.config.network.subnetmask || "Not set"}`, "0x0F000", "0x0F100");
+          } else {
+            display("0x00000", "DHCP - Automatic configuration", "0x0F000", "0x0F900");
+          }
+        }
+        else if (res === "config") {
+          async function configIP() {
+            function rl(prefix: string) {
+              if (typeof prefix !== "string") {
+                display("0x00000", "Prefix must be a string", "0x0F000", "0x0F200");
+                return "";
+              }
+              else {
+                return readlineSync.question(prefix);
+              }
+            }
+            
+            let running = true;
+            const tui_header = "IP Configuration Tool";
+            display("0x00000", "\n" + tui_header, "0x1F000", "0x0F700");
+            display("0x00000", "Commands: type, ip, gateway, dns, subnet, show, save, exit\n", "0x0F000", "0x0F900");
+            
+            while (running) {
+              let input = rl("ip-config> ");
+              if (typeof input !== "string") {
+                display("0x00000", "Input must be a string", "0x0F000", "0x0F200");
+                continue;
+              }
+              
+              let cmd = input.trim();
+              
+              if (cmd === "exit") {
+                running = false;
+                display("0x00000", "Exiting IP configuration", "0x0F000", "0x0F400");
+              }
+              else if (cmd === "type") {
+                let looped = true;
+                while (looped) {
+                  let inpt = rl("(MANUAL or DHCP)> ");
+                  if (typeof inpt === "string") {
+                    inpt = inpt.toUpperCase();
+                    if (inpt === "DHCP") {
+                      KernelData.config.network.type = "DHCP";
+                      display("0x00000", "DHCP selected!", "0x0F000", "0x0F400");
+                      looped = false;
+                    }
+                    else if (inpt === "MANUAL") {
+                      KernelData.config.network.type = "MANUAL";
+                      display("0x00000", "MANUAL selected!", "0x0F000", "0x0F400");
+                      looped = false;
+                    }
+                    else {
+                      display("0x00000", "Invalid input. Please enter MANUAL or DHCP", "0x0F000", "0x0F300");
+                    }
+                  }
+                  else {
+                    display("0x00000", "Invalid input", "0x0F000", "0x0F200");
+                  }
+                }
+              }
+              else if (cmd === "ip") {
+                if (KernelData.config.network.type === "DHCP") {
+                  display("0x00000", "DHCP is selected! To change the IP address, change type to MANUAL", "0x0F000", "0x0F300");
+                }
+                else {
+                  let inpt = rl("Enter IP address> ");
+                  if (typeof inpt === "string" && inpt.trim()) {
+                    KernelData.config.network.ip = inpt.trim();
+                    display("0x00000", `IP address set to: ${inpt.trim()}`, "0x0F000", "0x0F400");
+                  }
+                  else {
+                    display("0x00000", "Invalid IP address", "0x0F000", "0x0F200");
+                  }
+                }
+              }
+              else if (cmd === "gateway") {
+                if (KernelData.config.network.type === "DHCP") {
+                  display("0x00000", "DHCP is selected! To change the gateway, change type to MANUAL", "0x0F000", "0x0F300");
+                }
+                else {
+                  let inpt = rl("Enter gateway address> ");
+                  if (typeof inpt === "string" && inpt.trim()) {
+                    KernelData.config.network.gateway = inpt.trim();
+                    display("0x00000", `Gateway set to: ${inpt.trim()}`, "0x0F000", "0x0F400");
+                  }
+                  else {
+                    display("0x00000", "Invalid gateway address", "0x0F000", "0x0F200");
+                  }
+                }
+              }
+              else if (cmd === "dns") {
+                if (KernelData.config.network.type === "DHCP") {
+                  display("0x00000", "DHCP is selected! To change DNS, change type to MANUAL", "0x0F000", "0x0F300");
+                }
+                else {
+                  let inpt = rl("Enter DNS server> ");
+                  if (typeof inpt === "string" && inpt.trim()) {
+                    KernelData.config.network.dns = inpt.trim();
+                    display("0x00000", `DNS set to: ${inpt.trim()}`, "0x0F000", "0x0F400");
+                  }
+                  else {
+                    display("0x00000", "Invalid DNS server", "0x0F000", "0x0F200");
+                  }
+                }
+              }
+              else if (cmd === "subnet") {
+                if (KernelData.config.network.type === "DHCP") {
+                  display("0x00000", "DHCP is selected! To change subnet mask, change type to MANUAL", "0x0F000", "0x0F300");
+                }
+                else {
+                  let inpt = rl("Enter subnet mask> ");
+                  if (typeof inpt === "string" && inpt.trim()) {
+                    KernelData.config.network.subnetmask = inpt.trim();
+                    display("0x00000", `Subnet mask set to: ${inpt.trim()}`, "0x0F000", "0x0F400");
+                  }
+                  else {
+                    display("0x00000", "Invalid subnet mask", "0x0F000", "0x0F200");
+                  }
+                }
+              }
+              else if (cmd === "show") {
+                display("0x00000", "\nCurrent Configuration:", "0x1F000", "0x0F700");
+                display("0x00000", `Type: ${KernelData.config.network.type}`, "0x0F000", "0x0F100");
+                if (KernelData.config.network.type === "MANUAL") {
+                  display("0x00000", `IP: ${KernelData.config.network.ip || "Not set"}`, "0x0F000", "0x0F100");
+                  display("0x00000", `Gateway: ${KernelData.config.network.gateway || "Not set"}`, "0x0F000", "0x0F100");
+                  display("0x00000", `DNS: ${KernelData.config.network.dns || "Not set"}`, "0x0F000", "0x0F100");
+                  display("0x00000", `Subnet: ${KernelData.config.network.subnetmask || "Not set"}`, "0x0F000", "0x0F100");
+                }
+                display("0x00000", "", "0x0F000", "0x0F100");
+              }
+              else if (cmd === "save") {
+                try {
+                  // Load existing data
+                  let existingData: any = {};
+                  if (existsSync('data.json')) {
+                    const data = await readFile('data.json', 'utf-8');
+                    existingData = JSON.parse(data);
+                  }
+                  
+                  // Merge network config with existing data
+                  existingData.network = KernelData.config.network;
+                  
+                  // Save back to file
+                  await writeFile('data.json', JSON.stringify(existingData, null, 2));
+                  
+                  display("0x00000", "Configuration saved to data.json", "0x0F000", "0x0F400");
+                } catch (err) {
+                  const error = err as Error;
+                  display("0x00000", `Failed to save configuration: ${error.message}`, "0x0F000", "0x0F200");
+                }
+              }
+              else if (cmd === "") {
+                // Empty input, do nothing
+              }
+              else {
+                display("0x00000", `Unknown command: ${cmd}`, "0x0F000", "0x0F200");
+                display("0x00000", "Available commands: type, ip, gateway, dns, subnet, show, save, exit", "0x0F000", "0x0F900");
+              }
+            }
+            return;
+          }
+          await configIP();
+        }
+        else {
+          display("0x00000", "Usage: ip [a|config]", "0x0F000", "0x0F300");
+          display("0x00000", "  ip a      - Show network configuration", "0x0F000", "0x0F900");
+          display("0x00000", "  ip config - Configure network settings", "0x0F000", "0x0F900");
+        }
+        break;
+      case command.startsWith(memory["0xFF000"]["0xFF009"]) && command:
+        const pingTarget = command.substring(memory["0xFF000"]["0xFF009"].length).trim();
+        if (!pingTarget) {
+          display("0x00000", "Usage: ping [host/ip]", "0x0F000", "0x0F300");
+          display("0x00000", "Example: ping google.com", "0x0F000", "0x0F900");
+          break;
+        }
+        
+        display("0x00000", `Pinging ${pingTarget}...`, "0x0F000", "0x0F700");
+        
+        try {
+          // Determine OS-specific ping command
+          const isWindows = process.platform === "win32";
+          const pingCommand = isWindows 
+            ? `ping -n 4 ${pingTarget}` 
+            : `ping -c 4 ${pingTarget}`;
+          
+          const { stdout, stderr } = await execPromise(pingCommand);
+          
+          if (stderr) {
+            display("0x00000", `Error: ${stderr}`, "0x0F000", "0x0F200");
+          } else {
+            // Display ping results
+            const lines = stdout.split('\n');
+            lines.forEach(line => {
+              if (line.trim()) {
+                if (line.includes('time=') || line.includes('TTL=')) {
+                  display("0x00000", line, "0x0F000", "0x0F400");
+                } else if (line.includes('packets transmitted') || line.includes('Packets:')) {
+                  display("0x00000", line, "0x1F000", "0x0F700");
+                } else {
+                  display("0x00000", line, "0x0F000", "0x0F100");
+                }
+              }
+            });
+          }
+        } catch (err) {
+          const error = err as Error;
+          display("0x00000", `Ping failed: ${error.message}`, "0x0F000", "0x0F200");
+          display("0x00000", "Host may be unreachable or invalid", "0x0F000", "0x0F300");
         }
         break;
       default:
@@ -357,9 +631,26 @@ function PreL() {
       if (existsSync('data.json')) {
         const data = await readFile('data.json', 'utf-8');
         const parsedData = JSON.parse(data);
+        
+        // Load username
         if (parsedData.username) {
           KernelData.username = parsedData.username;
           KernelData.logedIn = true;
+        }
+        
+        // Load network configuration
+        if (parsedData.network) {
+          KernelData.config.network = {
+            type: parsedData.network.type || "DHCP",
+            ip: parsedData.network.ip || "",
+            gateway: parsedData.network.gateway || "",
+            dns: parsedData.network.dns || "",
+            subnetmask: parsedData.network.subnetmask || ""
+          };
+          
+          if (KernelData.DisplayDebug) {
+            display("0x00000", "Network configuration loaded from data.json", "0x0F000", "0x0F400");
+          }
         }
       }
     } catch (error) {
@@ -374,7 +665,7 @@ function PreL() {
 const memory: Record<string, any> = {
   "0xF0000": "Lumen ",
   "0xF0001": "~ ",
-  "0xF0002": "",
+  "0xF0002": "",
   "0xFF000": {
     //commands
     "0xFF001": "exit",
@@ -382,6 +673,9 @@ const memory: Record<string, any> = {
     "0xFF003": "help",
     "0xFF005": "clear",
     "0xFF006": "system",
+    "0xFF007": "edit",
+    "0xFF008": "ip",
+    "0xFF009": "ping"
   },
   "0xFFD00": true, //Loop
   "0xFFE07": "", // Will be set after awaiting getLatestCommit()
@@ -392,6 +686,9 @@ const memory: Record<string, any> = {
   -echo MESSAGE
   -help
   -clear
+  -edit (open editor)
+  -ip [a|config] (network configuration)
+  -ping [host/ip] (test network connectivity)
   -system
    -u (update)
    -v (version)
