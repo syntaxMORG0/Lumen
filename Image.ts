@@ -3,7 +3,9 @@ import { get } from "node:http";
 import { styleText } from "node:util";
 import { startupSnapshot } from "node:v8";
 import * as readlineSync from "readline-sync";
-import { readFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import crypto from "crypto";
 
 //high-level kernel data
 //Userdata wil later be stored in a JSON file
@@ -15,7 +17,10 @@ let KernelData = {
   username: "", //leave blank
   author: {
     username: "syntaxMORG0",
-    Repo: "Lumen"
+    Repo: "Lumen",
+  },
+  temp: {
+    autoE2E_API: "" //leave empty the key is automatically generated
   }
 };
 
@@ -146,7 +151,6 @@ function display(
   }
   return;
 }
-
 function exit(adress: string, code?: number, reason?: string) {
   if (adress) {
     console.log("");
@@ -176,13 +180,15 @@ function exit(adress: string, code?: number, reason?: string) {
   console.log(styleText("gray", memory["0x1E002"] + memory["0xF0002"]));
   return;
 }
-
+function wrt(content: string) {
+  return display("0x00000", content, "0x0F000", "0x0F100");
+};
 function ReadLn(adress?: string, prefix?: string | undefined) {
   if (KernelData.username != "") {
     return readlineSync.question(
       prefix
         ? prefix
-        : styleText("green", KernelData.username + "@lumen ~ ")
+        : styleText("green", memory["0xF0002"] + "  " + KernelData.username + "@lumen ~ ")
     );
   }
   else {
@@ -192,7 +198,11 @@ function ReadLn(adress?: string, prefix?: string | undefined) {
   }
 }
 
-function CommandEngine(command: string) {
+function LumenEditor() {
+  //comming soon
+}
+
+async function CommandEngine(command: string) {
   if (command) {
     switch (command) {
       case memory["0xFF000"]["0xFF001"]:
@@ -250,41 +260,59 @@ function CommandEngine(command: string) {
           }
           buildAnswer(checkForUpdate());      
         } else if (subCommand === "--ghlogin") {
-          const readlineSync = require('readline-sync');
-          const fs = require('fs');
-          const fetch = require('node-fetch');
-                    
-          function Readtoken() {
-            return readlineSync.question(memory["0xF0002"] + " Token: ");
+          const token = readlineSync.question("Enter GitHub Personal Access Token: ", {
+            hideEchoBack: true
+          });
+          
+          if (!token) {
+            display("0x00000", "No token provided!", "0x0F000", "0x0F200");
+            break;
           }
 
-          let token = Readtoken();
-          
-          async function logInWithGithub(token) {
-            if (!token) {
-              display("0x00000", "No token provided!", "0x0F000", "0x0F200");
-              return;
-            }
-            try {
-              const response = await fetch('https://api.github.com/user', {
-                headers: {
-                  'Authorization': `token ${token}`,
-                  'User-Agent': 'Node.js CLI Script'
-                }
-              });
-              if (!response.ok) {
-                display("0x00000", "Failed to fetch user info. Check your token.", "0x0F000", "0x0F200");
-                return;
+          try {
+            const response = await fetch('https://api.github.com/user', {
+              headers: {
+                'Authorization': `token ${token}`,
+                'User-Agent': 'Lumen-CLI'
               }
-              const responseFromJSON = await fetch('data.json');
-              const data: { username: string } = await responseFromJSON.json();
-              const username = data.username;
-              console.log('Username:', username);
-            } catch (err) {
-              exit("0x00000",0, "Error:" + err.message);
+            });
+
+            if (!response.ok) {
+              display("0x00000", "Failed to authenticate. Check your token.", "0x0F000", "0x0F200");
+              break;
             }
+
+            const userData = await response.json();
+            const username = userData.login;
+
+            // Save both username and token to data.json
+            await writeFile('data.json', JSON.stringify({ username, token }, null, 2));
+            
+            KernelData.username = username;
+            KernelData.logedIn = true;
+
+            display("0x00000", `Successfully logged in as ${username}!`, "0x0F000", "0x0F400");
+          } catch (err) {
+            const error = err as Error;
+            exit("0x00000", 0, "Error: " + error.message);
           }
-          logInWithGithub(token); 
+        } else if (subCommand === "--ghlogout") {
+          try {
+            if (!KernelData.logedIn) {
+              display("0x00000", "You are not logged in!", "0x0F000", "0x0F300");
+              break;
+            }
+            const previousUsername = KernelData.username;
+            await writeFile('data.json', JSON.stringify({}, null, 2));
+            
+            KernelData.username = "";
+            KernelData.logedIn = false;
+
+            display("0x00000", `Logged out from ${previousUsername}`, "0x0F000", "0x0F400");
+          } catch (err) {
+            const error = err as Error;
+            exit("0x00000", 0, "Error during logout: " + error.message);
+          }
         }
         else {
           display("0x00000", "missing arguments!", "0x0F000", "0x0F200");
@@ -297,16 +325,51 @@ function CommandEngine(command: string) {
   }
   return;
 }
-
 function PreL() {
   if (KernelData.clearOnStart) {
     console.clear();
+  }  
+  function WTM() { //E2E encryption
+    const salt = "c3ludGF4TU9SRzA=";
+    function saltHandler(input: string) {
+      let unSalted = Buffer.from(input, 'base64').toString("utf8");
+      return unSalted;
+    };
+    const postPr = saltHandler(salt);
+    memory["0x1E010"] = postPr;
+    memory["0x1E020"] = memory["0x1E00F"] + memory["0x1E010"];
+    wrt(memory["0x1E020"]);
+    let after = Buffer.from(memory["0x1E020"], "utf8").toString("base64");
+    let keygen = crypto.createHash('sha256').update(after).digest('hex');
+    KernelData.temp.autoE2E_API = keygen;
+    if (KernelData.DisplayDebug === true) {
+      display("0x00000", "API Key Generated: " + keygen + " DO NOT SHARE WITH ANYONE!", "0x0F000", "0x0F200");
+    }
+    memory["0x1E020"] = keygen; //lock the API key
+    if (typeof memory["0x1E020"] === "string") {
+      if (memory["0x1E020"] !== KernelData.temp.autoE2E_API || salt !== "c3ludGF4TU9SRzA=" || after !== "ZGV2ZWxvcGVkIGJ5IHN5bnRheE1PUkcw") {
+        exit("0x00000", 0, "End 2 End encryption key is not matching!");
+      };
+    }
+  };
+  async function loadUserData() {
+    try {
+      if (existsSync('data.json')) {
+        const data = await readFile('data.json', 'utf-8');
+        const parsedData = JSON.parse(data);
+        if (parsedData.username) {
+          KernelData.username = parsedData.username;
+          KernelData.logedIn = true;
+        }
+      }
+    } catch (error) {
+      // File doesn't exist or is invalid, ignore
+    }
   }
-  function CheckJSONfile(file) {
-    //check for 
-  }
+  WTM();
+  loadUserData();
   return;
-}
+};
 
 const memory: Record<string, any> = {
   "0xF0000": "Lumen ",
@@ -333,6 +396,8 @@ const memory: Record<string, any> = {
    -u (update)
    -v (version)
    -h (help)
+   --ghlogin (login with GitHub)
+   --ghlogout (logout from GitHub)
   `,
   "0x1E000": "Task has unexpectely crashed: ",
   "0x1E001": "Task has finished sucsessfully! code 1",
@@ -343,6 +408,7 @@ const memory: Record<string, any> = {
   "0x1E00C": " - developed by syntaxMORG0 ",
   "0x1E00D": "Welcome to Lumen, ",
   "0x1E00E": "!",
+  "0x1E00F": "developed by ",
 };
 
 //main loop
@@ -360,7 +426,7 @@ const memory: Record<string, any> = {
     display("0x00000", memory["0x1E00C"] + memory["0xF0002"], "0x0F000", "0x0F100");
     while (memory["0xFFD00"]) {
       let input = ReadLn("0x00001");
-      CommandEngine(input);
+      await CommandEngine(input);
     }
     exit("0x00002", 1);
   }
