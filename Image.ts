@@ -155,7 +155,7 @@ function display(
       }
       let styles = FormatedText ? [Color, FormatedText] : [Color];
       let formatedText = styleText(styles as any, Message);
-      console.log(formatedText);
+      process.stdout.write(formatedText + '\n');
     } else {
       exit("0x00000", 0, "missing argument: content");
     }
@@ -164,9 +164,10 @@ function display(
   }
   return;
 }
+
 function exit(adress: string, code?: number, reason?: string) {
   if (adress) {
-    console.log("");
+    process.stdout.write("\n");
     switch (code) {
       case 0:
         //crashed
@@ -176,7 +177,7 @@ function exit(adress: string, code?: number, reason?: string) {
         display("0x00000", memory["0x1E000"] + reason, "0x0F000", "0x0F200");
         if (stackLines) {
           display("0x00000", "Stack trace:", "0x0F000", "0x0F900");
-          console.log(styleText("gray", stackLines));
+          process.stdout.write(styleText("gray", stackLines) + '\n');
         }
         process.exit(0);
       case 1:
@@ -190,9 +191,10 @@ function exit(adress: string, code?: number, reason?: string) {
         break;
     }
   }
-  console.log(styleText("gray", memory["0x1E002"] + memory["0xF0002"]));
+  process.stdout.write(styleText("gray", memory["0x1E002"] + memory["0xF0002"]) + '\n');
   return;
 }
+
 function wrt(content: string) {
   return display("0x00000", content, "0x0F000", "0x0F100");
 };
@@ -296,7 +298,7 @@ async function CommandEngine(command: string) {
               }
               const latestRelease = await response.json();
               
-              console.log("Latest Release:", latestRelease);
+              process.stdout.write("Latest Release: " + JSON.stringify(latestRelease) + '\n');
               return latestRelease;
             } catch (error) {
               exit("0x00000", 0, "Failed to fetch latest release:" + error);
@@ -599,8 +601,39 @@ async function CommandEngine(command: string) {
   }
   return;
 }
+function loading(): Promise<void> {
+  console.clear();
+  return new Promise((resolve) => {
+    const barItem = "█";
+    const emptyItem = "░";
+    const length = 50;
+    const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let i = 0;
+
+    function updateBar() {
+      const spinChar = spinner[i % spinner.length];
+      const progress = Math.floor((i / length) * 100);
+      const filledLength = Math.floor((i / length) * length);
+      const bar = barItem.repeat(filledLength) + emptyItem.repeat(length - filledLength);
+      
+      process.stdout.write(`\r${spinChar} [${bar}] ${progress.toString().padStart(3)}%`);
+
+      i++;
+      if (i <= length) {
+        setTimeout(updateBar, 100);
+      } else {
+        process.stdout.write(`\r✓ [${barItem.repeat(length)}] 100%\n\n`);
+        resolve();
+      }
+    }
+
+    updateBar();
+  });
+}
+
 function PreL() {
   if (KernelData.clearOnStart) {
+    console.log("\n")
     console.clear();
   }  
   function WTM() { //E2E encryption
@@ -624,7 +657,7 @@ function PreL() {
       if (memory["0x1E020"] !== KernelData.temp.autoE2E_API || salt !== "c3ludGF4TU9SRzA=" || after !== "ZGV2ZWxvcGVkIGJ5IHN5bnRheE1PUkcw") {
         exit("0x00000", 0, "End 2 End encryption key is not matching!");
       };
-    }
+    };
   };
   async function loadUserData() {
     try {
@@ -665,7 +698,7 @@ function PreL() {
 const memory: Record<string, any> = {
   "0xF0000": "Lumen ",
   "0xF0001": "~ ",
-  "0xF0002": "",
+  "0xF0002": "",
   "0xFF000": {
     //commands
     "0xFF001": "exit",
@@ -710,10 +743,11 @@ const memory: Record<string, any> = {
 
 //main loop
 (async () => {
+  await loading();
   PreL(); //pre-load tasks
 
   memory["0xFFE07"] = await getLatestCommit();
-
+  console.log("\n");
   while (KernelData.running) {
     if (KernelData.DisplayDebug) {
       display("0x00000", memory["0xFFE07"], "0x0F000", "0x0FA00");
